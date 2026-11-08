@@ -82,6 +82,16 @@ export const api = {
     request<Visit[]>(
       `/visits/${encodeURIComponent(personId)}?limit=${limit}`,
     ),
+  createVisit: (visit: {
+    personId: string;
+    address: string;
+    title: string;
+    source: Visit["source"];
+  }) =>
+    request<Visit>("/visits", {
+      method: "POST",
+      body: JSON.stringify(visit),
+    }),
   publishSite: (site: {
     address: string;
     title: string;

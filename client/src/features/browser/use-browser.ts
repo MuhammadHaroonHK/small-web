@@ -10,9 +10,17 @@ import type {
   BrowserSession,
   SearchEntry,
 } from "@/features/browser/browser-session";
-import type { Site } from "@/types/api";
+import type { Site, VisitSource } from "@/types/api";
 
 const SESSION_KEY = "small-web:browser-session:v1";
+
+export type BrowserArrival = {
+  id: string;
+  entryId: string;
+  address: string;
+  personId: string;
+  source: VisitSource;
+};
 
 function createEntryId() {
   return globalThis.crypto?.randomUUID?.() ??
@@ -67,6 +75,7 @@ export function useBrowser() {
   const [isRestored, setIsRestored] = useState(false);
   const [sessionError, setSessionError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
+  const [arrival, setArrival] = useState<BrowserArrival | null>(null);
   const pendingRestoreId = useRef<string | null>(null);
   const currentFrameScroll = useRef(0);
   const scrollSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -234,11 +243,27 @@ export function useBrowser() {
     });
   }, [commit]);
 
+  const createArrival = useCallback(
+    (entryId: string, address: string | null, source: VisitSource) => {
+      const personId = sessionRef.current.selectedPersonId;
+      if (!address || !personId) return;
+      setArrival({ id: createEntryId(), entryId, address, personId, source });
+    },
+    [],
+  );
+
   const navigateToPage = useCallback(
-    (address: string | null, frameScrollY?: number) => {
+    (
+      address: string | null,
+      source: VisitSource = "typed",
+      frameScrollY?: number,
+    ) => {
       const current = sessionRef.current;
       const active = current.entries[current.index];
-      if (active.kind === "page" && active.address === address) return;
+      if (active.kind === "page" && active.address === address) {
+        createArrival(active.id, address, source);
+        return;
+      }
 
       const id = createEntryId();
       const scrollY = window.scrollY;
@@ -261,9 +286,10 @@ export function useBrowser() {
           savedFrameScroll,
         ),
       );
+      createArrival(id, address, source);
       window.scrollTo(0, 0);
     },
-    [commit],
+    [commit, createArrival],
   );
 
   const openSearch = useCallback(() => {
@@ -431,20 +457,30 @@ export function useBrowser() {
     if (current.index <= 0) return;
     const target = current.entries[current.index - 1];
     captureCurrentPosition();
+    createArrival(
+      target.id,
+      target.kind === "page" ? target.address : null,
+      "back",
+    );
     pendingRestoreId.current = target.id;
     currentFrameScroll.current = target.frameScrollY;
     commit((state) => ({ ...state, index: state.index - 1 }));
-  }, [captureCurrentPosition, commit]);
+  }, [captureCurrentPosition, commit, createArrival]);
 
   const forward = useCallback(() => {
     const current = sessionRef.current;
     if (current.index >= current.entries.length - 1) return;
     const target = current.entries[current.index + 1];
     captureCurrentPosition();
+    createArrival(
+      target.id,
+      target.kind === "page" ? target.address : null,
+      "forward",
+    );
     pendingRestoreId.current = target.id;
     currentFrameScroll.current = target.frameScrollY;
     commit((state) => ({ ...state, index: state.index + 1 }));
-  }, [captureCurrentPosition, commit]);
+  }, [captureCurrentPosition, commit, createArrival]);
 
   const restoreScroll = useCallback((entryId: string) => {
     if (pendingRestoreId.current !== entryId) return;
@@ -469,6 +505,7 @@ export function useBrowser() {
 
   return {
     back,
+    arrival,
     browserState,
     completeSearch,
     currentEntry: browserState.entries[browserState.index],

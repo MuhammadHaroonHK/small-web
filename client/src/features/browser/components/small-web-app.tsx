@@ -13,7 +13,7 @@ import { PublishPanel } from "@/features/publish/components/publish-panel";
 import { SearchPanel } from "@/features/search/components/search-panel";
 import { useBrowser } from "@/features/browser/use-browser";
 import { ApiError, api } from "@/lib/api-client";
-import type { Person, Site, Visit } from "@/types/api";
+import type { Person, Site, Visit, VisitSource } from "@/types/api";
 
 type View = "browse" | "search" | "publish";
 type IframeLinkMessage = {
@@ -74,6 +74,7 @@ export function SmallWebApp() {
   const browser = useBrowser();
   const {
     back,
+    arrival,
     browserState,
     completeSearch,
     currentEntry,
@@ -112,8 +113,12 @@ export function SmallWebApp() {
     string | null
   >(null);
   const [historyError, setHistoryError] = useState<string | null>(null);
+  const [visitError, setVisitError] = useState<string | null>(null);
+  const [historyRefresh, setHistoryRefresh] = useState(0);
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const activeSearchRequests = useRef(new Set<string>());
+  const recordedArrivalIds = useRef(new Set<string>());
+  const historyRequestId = useRef(0);
   const entryId = currentEntry.id;
   const isPageEntry = currentEntry.kind === "page";
   const pageAddress = isPageEntry ? currentEntry.address : null;
@@ -138,7 +143,9 @@ export function SmallWebApp() {
   const searchStatus =
     currentEntry.kind === "search" ? currentEntry.searchStatus : null;
   const selectedPersonId = browserState.selectedPersonId;
-  const activePersonId = selectedPersonId || people[0]?._id || "";
+  const activePersonId = people.some((person) => person._id === selectedPersonId)
+    ? selectedPersonId
+    : people[0]?._id || "";
   const view: View = isPublishing
     ? "publish"
     : currentEntry.kind === "search"
@@ -146,13 +153,18 @@ export function SmallWebApp() {
       : "browse";
 
   const navigate = useCallback(
-    (targetAddress: string | null, frameScrollY?: number) => {
+    (
+      targetAddress: string | null,
+      source: VisitSource = "typed",
+      frameScrollY?: number,
+    ) => {
       setAddressDraft({ entryId: "", value: "" });
       setUnsupportedDestination(null);
       setIsPublishing(false);
-      navigateToPage(targetAddress, frameScrollY);
+      if (activePersonId) setSelectedPersonId(activePersonId);
+      navigateToPage(targetAddress, source, frameScrollY);
     },
-    [navigateToPage],
+    [activePersonId, navigateToPage, setSelectedPersonId],
   );
 
   const loadSites = useCallback(async () => {
@@ -181,19 +193,26 @@ export function SmallWebApp() {
   }, []);
 
   const loadHistory = useCallback(async (personId: string) => {
+    const requestId = ++historyRequestId.current;
     if (!personId) {
       setVisits([]);
+      setIsLoadingHistory(false);
       return;
     }
 
     setIsLoadingHistory(true);
     setHistoryError(null);
     try {
-      setVisits(await api.getVisits(personId));
+      const history = await api.getVisits(personId);
+      if (requestId === historyRequestId.current) setVisits(history);
     } catch (error) {
-      setHistoryError(getErrorMessage(error));
+      if (requestId === historyRequestId.current) {
+        setHistoryError(getErrorMessage(error));
+      }
     } finally {
-      setIsLoadingHistory(false);
+      if (requestId === historyRequestId.current) {
+        setIsLoadingHistory(false);
+      }
     }
   }, []);
 
@@ -246,28 +265,54 @@ export function SmallWebApp() {
 
   useEffect(() => {
     if (!activePersonId) return;
-    let active = true;
+
+    const requestId = ++historyRequestId.current;
     void api
       .getVisits(activePersonId)
       .then((history) => {
-        if (active) setVisits(history);
+        if (requestId !== historyRequestId.current) return;
+        setVisits(history);
+        setHistoryError(null);
       })
       .catch((error: unknown) => {
-        if (active) setHistoryError(getErrorMessage(error));
+        if (requestId === historyRequestId.current) {
+          setHistoryError(getErrorMessage(error));
+        }
       })
       .finally(() => {
-        if (active) setIsLoadingHistory(false);
+        if (requestId === historyRequestId.current) {
+          setIsLoadingHistory(false);
+        }
       });
 
     return () => {
-      active = false;
+      if (requestId === historyRequestId.current) {
+        historyRequestId.current += 1;
+      }
     };
-  }, [activePersonId]);
+  }, [activePersonId, historyRefresh]);
 
   function handlePersonChange(personId: string) {
     setSelectedPersonId(personId);
+    setVisits([]);
     setHistoryError(null);
     setIsLoadingHistory(true);
+  }
+
+  function handleBack() {
+    if (activePersonId) setSelectedPersonId(activePersonId);
+    setIsPublishing(false);
+    setUnsupportedDestination(null);
+    setAddressDraft({ entryId: "", value: "" });
+    back();
+  }
+
+  function handleForward() {
+    if (activePersonId) setSelectedPersonId(activePersonId);
+    setIsPublishing(false);
+    setUnsupportedDestination(null);
+    setAddressDraft({ entryId: "", value: "" });
+    forward();
   }
 
   useEffect(() => {
@@ -321,6 +366,36 @@ export function SmallWebApp() {
     isPageEntry,
     pageAddress,
     pageRequestKey,
+  ]);
+
+  useEffect(() => {
+    if (
+      !arrival ||
+      arrival.entryId !== entryId ||
+      arrival.address !== pageAddress ||
+      !pageLoadIsCurrent ||
+      recordedArrivalIds.current.has(arrival.id)
+    ) {
+      return;
+    }
+
+    recordedArrivalIds.current.add(arrival.id);
+    setVisitError(null);
+    void api
+      .createVisit({
+        personId: arrival.personId,
+        address: arrival.address,
+        title: currentSite?.title ?? "Unavailable page",
+        source: arrival.source,
+      })
+      .then(() => setHistoryRefresh((version) => version + 1))
+      .catch((error: unknown) => setVisitError(getErrorMessage(error)));
+  }, [
+    arrival,
+    currentSite,
+    entryId,
+    pageAddress,
+    pageLoadIsCurrent,
   ]);
 
   useEffect(() => {
@@ -393,7 +468,7 @@ export function SmallWebApp() {
       );
 
       if (resolution.kind === "internal") {
-        navigate(resolution.address, event.data.scrollY);
+        navigate(resolution.address, "link", event.data.scrollY);
         return;
       }
 
@@ -437,7 +512,7 @@ export function SmallWebApp() {
   }
 
   function handleHistorySelect(visit: Visit) {
-    navigate(visit.address);
+    navigate(visit.address, "history");
   }
 
   function renderBrowse() {
@@ -567,7 +642,7 @@ export function SmallWebApp() {
               <button
                 className="group min-h-40 rounded-2xl border border-stone-200 bg-white p-5 text-left shadow-sm hover:-translate-y-0.5 hover:border-emerald-200 hover:shadow-md"
                 key={site._id}
-                onClick={() => navigate(site.address)}
+                onClick={() => navigate(site.address, "typed")}
                 type="button"
               >
                 <span className="flex items-center justify-between">
@@ -674,7 +749,7 @@ export function SmallWebApp() {
                   setIsPublishing(false);
                   setUnsupportedDestination(null);
                   setAddressDraft({ entryId: "", value: "" });
-                  back();
+                  handleBack();
                 }}
                 title="Go back"
                 type="button"
@@ -692,7 +767,7 @@ export function SmallWebApp() {
                   setIsPublishing(false);
                   setUnsupportedDestination(null);
                   setAddressDraft({ entryId: "", value: "" });
-                  forward();
+                  handleForward();
                 }}
                 title="Go forward"
                 type="button"
@@ -707,7 +782,7 @@ export function SmallWebApp() {
                 setAddressDraft({ entryId, value })
               }
               onSubmit={(targetAddress) => {
-                navigate(targetAddress);
+                navigate(targetAddress, "typed");
               }}
             />
             <div className="hidden items-center gap-2 xl:flex">
@@ -771,7 +846,7 @@ export function SmallWebApp() {
                   onRetry={browser.retrySearch}
                   onSearch={handleSearch}
                   onSelect={(site) => {
-                    navigate(site.address);
+                    navigate(site.address, "search");
                   }}
                   query={searchQuery}
                   results={
@@ -796,6 +871,11 @@ export function SmallWebApp() {
                 onSelect={handleHistorySelect}
                 visits={visits}
               />
+              {visitError && (
+                <p className="text-xs text-rose-700" role="alert">
+                  This visit couldn&apos;t be saved: {visitError}
+                </p>
+              )}
               <div className="rounded-xl bg-[#eeefe9] p-4">
                 <p className="text-xs font-semibold text-stone-700">
                   A note for {activePersonName.split(" ")[0]}
