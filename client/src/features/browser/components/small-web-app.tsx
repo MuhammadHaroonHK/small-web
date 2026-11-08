@@ -116,7 +116,6 @@ export function SmallWebApp() {
   const [visitError, setVisitError] = useState<string | null>(null);
   const [historyRefresh, setHistoryRefresh] = useState(0);
   const iframeRef = useRef<HTMLIFrameElement>(null);
-  const activeSearchRequests = useRef(new Set<string>());
   const recordedArrivalIds = useRef(new Set<string>());
   const historyRequestId = useRef(0);
   const entryId = currentEntry.id;
@@ -413,28 +412,24 @@ export function SmallWebApp() {
       return;
     }
 
-    const requestKey = `${searchEntryId}:${searchQuery}`;
-    if (activeSearchRequests.current.has(requestKey)) return;
-    activeSearchRequests.current.add(requestKey);
+    const controller = new AbortController();
     let active = true;
     void api
-      .searchSites(searchQuery.trim())
+      .searchSites(searchQuery.trim(), controller.signal)
       .then((results) => {
+        if (!active) return;
         completeSearch(searchEntryId, searchQuery, results);
-        if (active) {
-          markPageReady(searchEntryId);
-        }
+        markPageReady(searchEntryId);
       })
       .catch((error: unknown) => {
+        if (!active) return;
         failSearch(searchEntryId, searchQuery, getErrorMessage(error));
-        if (active) {
-          markPageReady(searchEntryId);
-        }
-      })
-      .finally(() => activeSearchRequests.current.delete(requestKey));
+        markPageReady(searchEntryId);
+      });
 
     return () => {
       active = false;
+      controller.abort();
     };
   }, [
     completeSearch,

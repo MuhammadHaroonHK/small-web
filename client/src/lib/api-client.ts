@@ -76,8 +76,8 @@ export const api = {
   getSites: () => request<Site[]>("/sites"),
   getSite: (address: string) =>
     request<Site>(`/sites/${encodeURIComponent(address)}`),
-  searchSites: (query: string) =>
-    request<Site[]>(`/search?q=${encodeURIComponent(query)}`),
+  searchSites: (query: string, signal?: AbortSignal) =>
+    request<Site[]>(`/search?q=${encodeURIComponent(query)}`, { signal }),
   getVisits: (personId: string, limit = 50) =>
     request<Visit[]>(
       `/visits/${encodeURIComponent(personId)}?limit=${limit}`,

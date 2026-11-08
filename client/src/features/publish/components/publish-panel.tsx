@@ -4,6 +4,10 @@ import { useState } from "react";
 import type { FormEvent } from "react";
 import type { Person, Site } from "@/types/api";
 import { Icon } from "@/components/ui/icon";
+import { ApiError } from "@/lib/api-client";
+
+const INTERNAL_ADDRESS_PATTERN =
+  /^smallweb:\/\/[a-z0-9]+(?:-[a-z0-9]+)*(?:\/[a-z0-9]+(?:-[a-z0-9]+)*)*$/;
 
 type PublishPanelProps = {
   people: Person[];
@@ -28,24 +32,49 @@ export function PublishPanel({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  const [publishedSite, setPublishedSite] = useState<Site | null>(null);
+
+  function clearFeedback() {
+    setError(null);
+    setSuccess(null);
+    setPublishedSite(null);
+  }
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    setError(null);
-    setSuccess(null);
+    clearFeedback();
+
+    const normalizedAddress = address.trim().toLowerCase();
+    const normalizedTitle = title.trim();
+    const normalizedHtml = html.trim();
+    if (!INTERNAL_ADDRESS_PATTERN.test(normalizedAddress)) {
+      setError(
+        "Use an address like smallweb://my-little-page with lowercase letters, numbers, and hyphens.",
+      );
+      return;
+    }
+    if (!normalizedTitle || !normalizedHtml || !authorId) {
+      setError("Choose an author and complete every field before publishing.");
+      return;
+    }
+
     setIsSubmitting(true);
 
-    void onPublish({ address, title, html, authorId })
+    void onPublish({
+      address: normalizedAddress,
+      title: normalizedTitle,
+      html: normalizedHtml,
+      authorId,
+    })
       .then((site) => {
         setSuccess(`${site.title} is now part of the small web.`);
-        setAddress("smallweb://");
-        setTitle("");
-        setHtml("");
-        onPublished(site);
+        setPublishedSite(site);
       })
       .catch((cause: unknown) => {
         setError(
-          cause instanceof Error
+          cause instanceof ApiError && cause.status === 409
+            ? "That address has already been published. Choose a different address."
+            : cause instanceof Error
             ? cause.message
             : "Your page couldn't be published. Please try again.",
         );
@@ -76,8 +105,12 @@ export function PublishPanel({
           </span>
           <input
             className="h-11 w-full rounded-lg border border-stone-200 bg-stone-50 px-3 font-mono text-sm text-stone-800 outline-none focus:border-emerald-700 focus:ring-4 focus:ring-emerald-900/5"
-            onChange={(event) => setAddress(event.target.value)}
-            pattern="smallweb://[a-z0-9]+(-[a-z0-9]+)*"
+            maxLength={200}
+            onChange={(event) => {
+              clearFeedback();
+              setAddress(event.target.value);
+            }}
+            pattern="smallweb://[a-z0-9]+(-[a-z0-9]+)*(\/[a-z0-9]+(-[a-z0-9]+)*)*"
             placeholder="smallweb://my-little-page"
             required
             title="Use smallweb:// followed by lowercase letters, numbers, and hyphens."
@@ -94,7 +127,10 @@ export function PublishPanel({
           <input
             className="h-11 w-full rounded-lg border border-stone-200 px-3 text-sm text-stone-800 outline-none focus:border-emerald-700 focus:ring-4 focus:ring-emerald-900/5"
             maxLength={200}
-            onChange={(event) => setTitle(event.target.value)}
+            onChange={(event) => {
+              clearFeedback();
+              setTitle(event.target.value);
+            }}
             placeholder="A short, clear title"
             required
             value={title}
@@ -106,7 +142,10 @@ export function PublishPanel({
           </span>
           <select
             className="h-11 w-full rounded-lg border border-stone-200 bg-white px-3 text-sm text-stone-800 outline-none focus:border-emerald-700 focus:ring-4 focus:ring-emerald-900/5"
-            onChange={(event) => setAuthorId(event.target.value)}
+            onChange={(event) => {
+              clearFeedback();
+              setAuthorId(event.target.value);
+            }}
             required
             value={authorId}
           >
@@ -125,7 +164,10 @@ export function PublishPanel({
           <textarea
             className="min-h-52 w-full resize-y rounded-lg border border-stone-200 px-3 py-3 font-mono text-xs leading-6 text-stone-700 outline-none focus:border-emerald-700 focus:ring-4 focus:ring-emerald-900/5"
             maxLength={100000}
-            onChange={(event) => setHtml(event.target.value)}
+            onChange={(event) => {
+              clearFeedback();
+              setHtml(event.target.value);
+            }}
             placeholder={"<h1>A small idea</h1>\n<p>Tell us about it...</p>"}
             required
             value={html}
@@ -143,11 +185,26 @@ export function PublishPanel({
           </p>
         )}
         {success && (
-          <p
-            className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2.5 text-sm text-emerald-900"
+          <div
+            className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2.5"
             role="status"
           >
-            {success}
+            <p className="text-sm text-emerald-900">{success}</p>
+            {publishedSite && (
+              <button
+                className="inline-flex items-center gap-2 text-sm font-semibold text-emerald-900 hover:text-emerald-700"
+                onClick={() => onPublished(publishedSite)}
+                type="button"
+              >
+                Open published page
+                <Icon className="size-4" name="arrow-right" />
+              </button>
+            )}
+          </div>
+        )}
+        {people.length === 0 && (
+          <p className="text-sm text-stone-500">
+            No people are available to select as an author yet.
           </p>
         )}
         <button

@@ -78,6 +78,12 @@ export function SearchPanel({
             title="Search couldn't load"
             tone="error"
           />
+        ) : !query.trim() ? (
+          <StatusState
+            icon={<Icon className="size-5" name="search" />}
+            message="Enter a word or phrase to search page titles and body text."
+            title="What are you looking for?"
+          />
         ) : hasSearched && results.length === 0 ? (
           <StatusState
             icon={<Icon className="size-5" name="search" />}
@@ -102,9 +108,12 @@ export function SearchPanel({
                 <span className="mt-1 block text-lg font-semibold text-stone-900">
                   {site.title}
                 </span>
-                <span className="mt-2 line-clamp-2 block text-sm leading-6 text-stone-500">
-                  {site.textContent}
-                </span>
+                {site.textContent?.trim() && (
+                  <span className="mt-2 block text-sm leading-6 text-stone-500">
+                    {site.textContent.trim().slice(0, 220)}
+                    {site.textContent.trim().length > 220 ? "…" : ""}
+                  </span>
+                )}
               </button>
             ))}
           </div>
