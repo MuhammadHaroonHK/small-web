@@ -2,7 +2,9 @@
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { MongooseModule } from '@nestjs/mongoose';
 import { PeopleModule } from './modules/people/people.module.js';
+import { SearchModule } from './modules/search/search.module.js';
 import { SitesModule } from './modules/sites/sites.module.js';
+import { VisitsModule } from './modules/visits/visits.module.js';
 
 @Module({
   imports: [
@@ -34,6 +36,8 @@ import { SitesModule } from './modules/sites/sites.module.js';
     }),
     PeopleModule,
     SitesModule,
+    VisitsModule,
+    SearchModule,
   ],
 })
 export class AppModule {}

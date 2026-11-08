@@ -49,6 +49,7 @@ export class Visit {
   visitedAt!: Date;
 
   @Prop({
+    type: String,
     required: true,
     enum: VISIT_SOURCES,
   })
