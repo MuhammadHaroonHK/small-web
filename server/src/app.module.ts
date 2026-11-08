@@ -1,6 +1,8 @@
 ﻿import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { MongooseModule } from '@nestjs/mongoose';
+import { PeopleModule } from './modules/people/people.module.js';
+import { SitesModule } from './modules/sites/sites.module.js';
 
 @Module({
   imports: [
@@ -30,6 +32,8 @@ import { MongooseModule } from '@nestjs/mongoose';
         };
       },
     }),
+    PeopleModule,
+    SitesModule,
   ],
 })
 export class AppModule {}
