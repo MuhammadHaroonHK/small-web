@@ -55,13 +55,20 @@ describe('SitesService', () => {
     );
   });
 
-  it('removes unsafe markup and derives searchable plain text', () => {
+  it('removes unsafe markup while preserving safe links and derives plain text', () => {
     const content = sanitizeSiteContent(
-      '<h1>Garden</h1><script>alert(1)</script><img src="https://example.com/a.png"><p onclick="alert(1)">Fresh herbs</p><a href="javascript:alert(1)">unsafe link</a>',
+      '<h1>Garden</h1><script>alert(1)</script><img src="https://example.com/a.png"><form action="https://example.com"><input value="unsafe"></form><iframe src="https://example.com"></iframe><object data="https://example.com"></object><svg onload="alert(1)"><script>alert(1)</script></svg><p onclick="alert(1)">Fresh herbs</p><a href="javascript:alert(1)">unsafe link</a><a href="data:text/html,hi">data link</a><a href="https://example.com">outside</a><a href="//example.com">protocol relative</a><a href="mailto:test@example.com">email</a><a href="smallweb://seed-library">inside</a><a href="next-page">relative</a>',
     );
 
     expect(content.html).toContain('<h1>Garden</h1>');
-    expect(content.html).not.toMatch(/script|onclick|img|javascript:/i);
+    expect(content.html).toContain('href="https://example.com"');
+    expect(content.html).toContain('href="//example.com"');
+    expect(content.html).toContain('href="mailto:test@example.com"');
+    expect(content.html).toContain('href="smallweb://seed-library"');
+    expect(content.html).toContain('href="next-page"');
+    expect(content.html).not.toMatch(
+      /<script|onclick|<img|javascript:|data:text|<form|<input|<iframe|<object|<svg|onload/i,
+    );
     expect(content.textContent).toContain('Garden');
     expect(content.textContent).toContain('Fresh herbs');
   });

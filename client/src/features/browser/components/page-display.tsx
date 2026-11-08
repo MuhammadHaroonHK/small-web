@@ -1,46 +1,15 @@
+import type { RefObject } from "react";
 import { Icon } from "@/components/ui/icon";
 import { StatusState } from "@/components/ui/status-state";
+import { createSandboxDocument } from "@/features/browser/iframe-document";
 import type { Site } from "@/types/api";
 
 type PageDisplayProps = {
   site: Site;
+  iframeRef: RefObject<HTMLIFrameElement | null>;
 };
 
-function createSandboxDocument(html: string) {
-  const policy = [
-    "default-src 'none'",
-    "img-src data:",
-    "style-src 'unsafe-inline'",
-    "font-src 'none'",
-    "connect-src 'none'",
-    "form-action 'none'",
-    "base-uri 'none'",
-    "object-src 'none'",
-    "frame-src 'none'",
-    "media-src 'none'",
-  ].join("; ");
-
-  return `<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8">
-    <meta http-equiv="Content-Security-Policy" content="${policy}">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <style>
-      :root { color-scheme: light; font-family: Arial, Helvetica, sans-serif; color: #292a25; }
-      * { box-sizing: border-box; }
-      body { max-width: 760px; margin: 0 auto; padding: 2rem 1.25rem 3rem; line-height: 1.75; overflow-wrap: anywhere; }
-      h1, h2, h3, h4, h5, h6 { line-height: 1.25; color: #1c2821; }
-      a { color: #17613d; }
-      pre { max-width: 100%; overflow: auto; padding: 1rem; background: #f3f4f1; }
-      blockquote { margin-left: 0; border-left: 3px solid #d5dfd6; padding-left: 1rem; color: #62675f; }
-    </style>
-  </head>
-  <body>${html}</body>
-</html>`;
-}
-
-export function PageDisplay({ site }: PageDisplayProps) {
+export function PageDisplay({ site, iframeRef }: PageDisplayProps) {
   if (!site.html) {
     return (
       <StatusState
@@ -62,13 +31,15 @@ export function PageDisplay({ site }: PageDisplayProps) {
       </header>
       <iframe
         className="block min-h-[420px] w-full bg-white sm:min-h-[560px]"
+        ref={iframeRef}
         referrerPolicy="no-referrer"
-        sandbox=""
+        sandbox="allow-scripts"
         srcDoc={createSandboxDocument(site.html)}
         title={site.title}
       />
       <footer className="border-t border-stone-100 px-5 py-3 text-xs text-stone-400 sm:px-8">
-        This page is isolated. Scripts, forms, and external requests are disabled.
+        This page is isolated. Publisher scripts, forms, and external requests
+        are disabled.
       </footer>
     </article>
   );

@@ -1,12 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { Icon } from "@/components/ui/icon";
 import { LoadingState, StatusState } from "@/components/ui/status-state";
 import { HistoryPanel } from "@/features/history/components/history-panel";
 import { AddressBar } from "@/features/browser/components/address-bar";
 import { PageDisplay } from "@/features/browser/components/page-display";
+import { resolveInternalLink } from "@/features/browser/link-navigation";
 import { PersonSelect } from "@/features/people/components/person-select";
 import { PublishPanel } from "@/features/publish/components/publish-panel";
 import { SearchPanel } from "@/features/search/components/search-panel";
@@ -14,6 +15,22 @@ import { ApiError, api } from "@/lib/api-client";
 import type { Person, Site, Visit } from "@/types/api";
 
 type View = "browse" | "search" | "publish";
+type IframeLinkMessage = {
+  type: "small-web:link";
+  href: string;
+};
+
+function isIframeLinkMessage(value: unknown): value is IframeLinkMessage {
+  if (typeof value !== "object" || value === null) return false;
+
+  const message = value as Record<string, unknown>;
+  return (
+    Object.keys(message).length === 2 &&
+    message.type === "small-web:link" &&
+    typeof message.href === "string" &&
+    message.href.length <= 2048
+  );
+}
 
 const navigation: { id: View; label: string; icon: "compass" | "search" | "plus" }[] =
   [
@@ -43,12 +60,16 @@ export function SmallWebApp() {
   const [isLoadingHistory, setIsLoadingHistory] = useState(true);
   const [sitesError, setSitesError] = useState<string | null>(null);
   const [siteError, setSiteError] = useState<string | null>(null);
+  const [unsupportedDestination, setUnsupportedDestination] = useState<
+    string | null
+  >(null);
   const [historyError, setHistoryError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<Site[]>([]);
   const [hasSearched, setHasSearched] = useState(false);
   const [isSearching, setIsSearching] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
+  const iframeRef = useRef<HTMLIFrameElement>(null);
   const activePersonId = selectedPersonId || people[0]?._id || "";
 
   const loadSites = useCallback(async () => {
@@ -162,6 +183,7 @@ export function SmallWebApp() {
     setAddress(targetAddress);
     setIsLoadingSite(true);
     setSiteError(null);
+    setUnsupportedDestination(null);
     setView("browse");
 
     try {
@@ -179,6 +201,35 @@ export function SmallWebApp() {
       setIsLoadingSite(false);
     }
   }, []);
+
+  useEffect(() => {
+    function handleFrameMessage(event: MessageEvent<unknown>) {
+      if (
+        event.source !== iframeRef.current?.contentWindow ||
+        !currentSite ||
+        !isIframeLinkMessage(event.data)
+      ) {
+        return;
+      }
+
+      const resolution = resolveInternalLink(
+        event.data.href,
+        currentSite.address,
+      );
+
+      if (resolution.kind === "internal") {
+        void openSite(resolution.address);
+        return;
+      }
+
+      setCurrentSite(null);
+      setSiteError(null);
+      setUnsupportedDestination(resolution.destination);
+    }
+
+    window.addEventListener("message", handleFrameMessage);
+    return () => window.removeEventListener("message", handleFrameMessage);
+  }, [currentSite, openSite]);
 
   async function runSearch() {
     if (!query.trim()) {
@@ -258,8 +309,22 @@ export function SmallWebApp() {
       );
     }
 
+    if (unsupportedDestination !== null) {
+      return (
+        <StatusState
+          icon={<Icon className="size-5" name="external" />}
+          message={
+            unsupportedDestination
+              ? `“${unsupportedDestination}” isn't a stored Small Web address. External and unsafe destinations stay closed.`
+              : "This link doesn't point to a supported stored address. External and unsafe destinations stay closed."
+          }
+          title="Destination not supported"
+        />
+      );
+    }
+
     if (currentSite) {
-      return <PageDisplay site={currentSite} />;
+      return <PageDisplay iframeRef={iframeRef} site={currentSite} />;
     }
 
     if (isLoadingSites) {

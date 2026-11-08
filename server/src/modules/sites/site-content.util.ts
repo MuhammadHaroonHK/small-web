@@ -32,7 +32,11 @@ const ALLOWED_TAGS = [
 export function normalizeSiteAddress(address: string): string {
   const normalized = address.trim().toLowerCase().replace(/\/+$/, '');
 
-  if (!/^smallweb:\/\/[a-z0-9]+(?:-[a-z0-9]+)*$/.test(normalized)) {
+  if (
+    !/^smallweb:\/\/[a-z0-9]+(?:-[a-z0-9]+)*(?:\/[a-z0-9]+(?:-[a-z0-9]+)*)*$/.test(
+      normalized,
+    )
+  ) {
     throw new BadRequestException(
       'Address must use the internal format smallweb://site-name.',
     );
@@ -50,11 +54,11 @@ export function sanitizeSiteContent(html: string): {
     allowedAttributes: {
       a: ['href', 'title'],
     },
-    allowedSchemes: ['smallweb'],
+    allowedSchemes: ['smallweb', 'http', 'https', 'mailto', 'tel'],
     allowedSchemesByTag: {
-      a: ['smallweb'],
+      a: ['smallweb', 'http', 'https', 'mailto', 'tel'],
     },
-    allowProtocolRelative: false,
+    allowProtocolRelative: true,
     enforceHtmlBoundary: true,
   });
   const textContent = convert(sanitizedHtml, {
