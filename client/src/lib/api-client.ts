@@ -26,10 +26,11 @@ async function request<T>(
   path: string,
   options: RequestInit = {},
 ): Promise<T> {
+  const url = `${getApiBaseUrl()}${path}`;
   let response: Response;
 
   try {
-    response = await fetch(`${getApiBaseUrl()}${path}`, {
+    response = await fetch(url, {
       ...options,
       headers: {
         Accept: "application/json",

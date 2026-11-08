@@ -5,12 +5,14 @@ import type { Person } from "@/types/api";
 type PersonSelectProps = {
   people: Person[];
   selectedId: string;
+  isLoading?: boolean;
   onChange: (personId: string) => void;
 };
 
 export function PersonSelect({
   people,
   selectedId,
+  isLoading = false,
   onChange,
 }: PersonSelectProps) {
   return (
@@ -25,11 +27,15 @@ export function PersonSelect({
       <select
         aria-label="Browsing as"
         className="min-w-0 bg-transparent text-sm font-medium text-stone-800 outline-none"
-        disabled={people.length === 0}
+        disabled={isLoading || people.length === 0}
         onChange={(event) => onChange(event.target.value)}
         value={selectedId}
       >
-        {people.length === 0 && <option value="">No people available</option>}
+        {people.length === 0 && (
+          <option value="">
+            {isLoading ? "Loading people…" : "No people available"}
+          </option>
+        )}
         {people.map((person) => (
           <option key={person._id} value={person._id}>
             {person.name}

@@ -5,6 +5,8 @@ import type { FormEvent } from "react";
 import { Icon } from "@/components/ui/icon";
 import { LoadingState, StatusState } from "@/components/ui/status-state";
 import { HistoryPanel } from "@/features/history/components/history-panel";
+import { AddressBar } from "@/features/browser/components/address-bar";
+import { PageDisplay } from "@/features/browser/components/page-display";
 import { PersonSelect } from "@/features/people/components/person-select";
 import { PublishPanel } from "@/features/publish/components/publish-panel";
 import { SearchPanel } from "@/features/search/components/search-panel";
@@ -30,6 +32,7 @@ export function SmallWebApp() {
   const [view, setView] = useState<View>("browse");
   const [people, setPeople] = useState<Person[]>([]);
   const [peopleError, setPeopleError] = useState<string | null>(null);
+  const [isLoadingPeople, setIsLoadingPeople] = useState(true);
   const [sites, setSites] = useState<Site[]>([]);
   const [selectedPersonId, setSelectedPersonId] = useState("");
   const [visits, setVisits] = useState<Visit[]>([]);
@@ -60,6 +63,22 @@ export function SmallWebApp() {
     }
   }, []);
 
+  const loadPeople = useCallback(async () => {
+    setIsLoadingPeople(true);
+    setPeopleError(null);
+    try {
+      const availablePeople = await api.getPeople();
+      setPeople(availablePeople);
+      setSelectedPersonId(
+        (current) => current || availablePeople[0]?._id || "",
+      );
+    } catch (error) {
+      setPeopleError(getErrorMessage(error));
+    } finally {
+      setIsLoadingPeople(false);
+    }
+  }, []);
+
   const loadHistory = useCallback(async (personId: string) => {
     if (!personId) {
       setVisits([]);
@@ -79,29 +98,32 @@ export function SmallWebApp() {
 
   useEffect(() => {
     let active = true;
-    void Promise.allSettled([api.getPeople(), api.getSites()]).then(
-      ([peopleResult, sitesResult]) => {
+    void api
+      .getPeople()
+      .then((availablePeople) => {
         if (!active) return;
-        if (peopleResult.status === "fulfilled") {
-          setPeople(peopleResult.value);
-        } else {
-          setPeopleError(getErrorMessage(peopleResult.reason));
-        }
-        if (sitesResult.status === "fulfilled") {
-          setSites(sitesResult.value);
-        } else {
-          setSitesError(getErrorMessage(sitesResult.reason));
-        }
-        if (
-          peopleResult.status === "rejected" ||
-          (peopleResult.status === "fulfilled" &&
-            peopleResult.value.length === 0)
-        ) {
-          setIsLoadingHistory(false);
-        }
-        setIsLoadingSites(false);
-      },
-    );
+        setPeople(availablePeople);
+        setSelectedPersonId(
+          (current) => current || availablePeople[0]?._id || "",
+        );
+      })
+      .catch((error: unknown) => {
+        if (active) setPeopleError(getErrorMessage(error));
+      })
+      .finally(() => {
+        if (active) setIsLoadingPeople(false);
+      });
+    void api
+      .getSites()
+      .then((availableSites) => {
+        if (active) setSites(availableSites);
+      })
+      .catch((error: unknown) => {
+        if (active) setSitesError(getErrorMessage(error));
+      })
+      .finally(() => {
+        if (active) setIsLoadingSites(false);
+      });
 
     return () => {
       active = false;
@@ -143,13 +165,9 @@ export function SmallWebApp() {
     setView("browse");
 
     try {
-      const site =
-        typeof siteOrAddress === "string"
-          ? await api.getSite(targetAddress)
-          : siteOrAddress.textContent
-            ? siteOrAddress
-            : await api.getSite(targetAddress);
+      const site = await api.getSite(targetAddress);
       setCurrentSite(site);
+      setAddress(site.address);
     } catch (error) {
       setCurrentSite(null);
       setSiteError(
@@ -161,11 +179,6 @@ export function SmallWebApp() {
       setIsLoadingSite(false);
     }
   }, []);
-
-  async function handleAddressSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (address.trim()) await openSite(address);
-  }
 
   async function runSearch() {
     if (!query.trim()) {
@@ -235,35 +248,18 @@ export function SmallWebApp() {
           }
           icon={<Icon className="size-5" name="globe" />}
           message={siteError}
-          title="This page isn't here"
+          title={
+            siteError.startsWith("There isn't")
+              ? "This page isn't here"
+              : "Page couldn't be loaded"
+          }
           tone={siteError.startsWith("There isn't") ? "default" : "error"}
         />
       );
     }
 
     if (currentSite) {
-      return (
-        <article className="overflow-hidden rounded-2xl border border-stone-200 bg-white shadow-sm">
-          <div className="border-b border-stone-100 px-6 py-7 sm:px-9 sm:py-9">
-            <p className="font-mono text-xs text-emerald-800">
-              {currentSite.address}
-            </p>
-            <h1 className="mt-3 text-3xl font-semibold tracking-tight text-stone-950 sm:text-4xl">
-              {currentSite.title}
-            </h1>
-          </div>
-          <div className="max-w-3xl px-6 py-7 sm:px-9 sm:py-9">
-            <p className="whitespace-pre-line text-base leading-8 text-stone-600">
-              {currentSite.textContent ||
-                "Page content is ready. Rich page rendering will be added with browser navigation."}
-            </p>
-            <p className="mt-8 border-t border-stone-100 pt-4 text-xs text-stone-400">
-              Small Web keeps every page inside this collection. The wider
-              internet is not fetched here.
-            </p>
-          </div>
-        </article>
-      );
+      return <PageDisplay site={currentSite} />;
     }
 
     if (isLoadingSites) {
@@ -447,32 +443,16 @@ export function SmallWebApp() {
                 <Icon className="size-[18px]" name="arrow-right" />
               </button>
             </div>
-            <form
-              className="flex h-10 min-w-0 flex-1 items-center gap-2 rounded-xl border border-stone-200 bg-white px-3 shadow-sm focus-within:border-emerald-700"
-              onSubmit={handleAddressSubmit}
-            >
-              <Icon className="size-4 shrink-0 text-stone-400" name="globe" />
-              <label className="sr-only" htmlFor="address-bar">
-                Site address
-              </label>
-              <input
-                className="min-w-0 flex-1 bg-transparent font-mono text-xs text-stone-700 outline-none placeholder:text-stone-400 sm:text-sm"
-                id="address-bar"
-                onChange={(event) => setAddress(event.target.value)}
-                placeholder="Enter a smallweb:// address"
-                value={address}
-              />
-              <button
-                aria-label="Open address"
-                className="flex size-7 shrink-0 items-center justify-center rounded-md text-stone-400 hover:bg-stone-100 hover:text-stone-800"
-                type="submit"
-              >
-                <Icon className="size-4" name="arrow-right" />
-              </button>
-            </form>
+            <AddressBar
+              address={address}
+              isLoading={isLoadingSite}
+              onAddressChange={setAddress}
+              onSubmit={(targetAddress) => void openSite(targetAddress)}
+            />
             <div className="hidden items-center gap-2 xl:flex">
               <span className="text-xs text-stone-400">Browsing as</span>
               <PersonSelect
+                isLoading={isLoadingPeople}
                 onChange={handlePersonChange}
                 people={people}
                 selectedId={selectedPersonId}
@@ -501,6 +481,7 @@ export function SmallWebApp() {
             ))}
             <div className="ml-auto xl:hidden">
               <PersonSelect
+                isLoading={isLoadingPeople}
                 onChange={handlePersonChange}
                 people={people}
                 selectedId={selectedPersonId}
@@ -554,9 +535,19 @@ export function SmallWebApp() {
             </aside>
           </div>
           {peopleError && (
-            <p className="mt-4 text-xs text-rose-700" role="status">
-              Person list unavailable: {peopleError}
-            </p>
+            <div
+              className="mt-4 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2.5 text-xs text-rose-800"
+              role="alert"
+            >
+              <span>Person list unavailable: {peopleError}</span>
+              <button
+                className="font-semibold underline underline-offset-2"
+                onClick={() => void loadPeople()}
+                type="button"
+              >
+                Retry
+              </button>
+            </div>
           )}
           <footer className="mt-12 flex flex-wrap items-center justify-between gap-2 border-t border-stone-200 pt-4 text-[11px] text-stone-400">
             <span>Small Web · made for wandering</span>
