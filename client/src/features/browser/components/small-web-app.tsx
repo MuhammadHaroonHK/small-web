@@ -11,6 +11,7 @@ import { resolveInternalLink } from "@/features/browser/link-navigation";
 import { PersonSelect } from "@/features/people/components/person-select";
 import { PublishPanel } from "@/features/publish/components/publish-panel";
 import { SearchPanel } from "@/features/search/components/search-panel";
+import { useBrowser } from "@/features/browser/use-browser";
 import { ApiError, api } from "@/lib/api-client";
 import type { Person, Site, Visit } from "@/types/api";
 
@@ -18,6 +19,12 @@ type View = "browse" | "search" | "publish";
 type IframeLinkMessage = {
   type: "small-web:link";
   href: string;
+  scrollY: number;
+};
+
+type IframeScrollMessage = {
+  type: "small-web:scroll";
+  y: number;
 };
 
 function isIframeLinkMessage(value: unknown): value is IframeLinkMessage {
@@ -25,10 +32,28 @@ function isIframeLinkMessage(value: unknown): value is IframeLinkMessage {
 
   const message = value as Record<string, unknown>;
   return (
-    Object.keys(message).length === 2 &&
+    Object.keys(message).length === 3 &&
     message.type === "small-web:link" &&
     typeof message.href === "string" &&
-    message.href.length <= 2048
+    message.href.length <= 2048 &&
+    typeof message.scrollY === "number" &&
+    Number.isFinite(message.scrollY) &&
+    message.scrollY >= 0 &&
+    message.scrollY <= 10_000_000
+  );
+}
+
+function isIframeScrollMessage(value: unknown): value is IframeScrollMessage {
+  if (typeof value !== "object" || value === null) return false;
+
+  const message = value as Record<string, unknown>;
+  return (
+    Object.keys(message).length === 2 &&
+    message.type === "small-web:scroll" &&
+    typeof message.y === "number" &&
+    Number.isFinite(message.y) &&
+    message.y >= 0 &&
+    message.y <= 10_000_000
   );
 }
 
@@ -46,31 +71,89 @@ function getErrorMessage(error: unknown) {
 }
 
 export function SmallWebApp() {
-  const [view, setView] = useState<View>("browse");
+  const browser = useBrowser();
+  const {
+    back,
+    browserState,
+    completeSearch,
+    currentEntry,
+    failSearch,
+    forward,
+    isRestored,
+    markPageReady,
+    navigateToPage,
+    openSearch,
+    reloadKey,
+    retryPage,
+    sessionError,
+    setSelectedPersonId,
+    submitSearch,
+    updateCurrentPosition,
+  } = browser;
+  const [isPublishing, setIsPublishing] = useState(false);
   const [people, setPeople] = useState<Person[]>([]);
   const [peopleError, setPeopleError] = useState<string | null>(null);
   const [isLoadingPeople, setIsLoadingPeople] = useState(true);
   const [sites, setSites] = useState<Site[]>([]);
-  const [selectedPersonId, setSelectedPersonId] = useState("");
   const [visits, setVisits] = useState<Visit[]>([]);
-  const [currentSite, setCurrentSite] = useState<Site | null>(null);
-  const [address, setAddress] = useState("");
+  const [pageLoad, setPageLoad] = useState<{
+    requestKey: string;
+    site: Site | null;
+    error: string | null;
+  } | null>(null);
+  const [addressDraft, setAddressDraft] = useState<{
+    entryId: string;
+    value: string;
+  }>({ entryId: "", value: "" });
   const [isLoadingSites, setIsLoadingSites] = useState(true);
-  const [isLoadingSite, setIsLoadingSite] = useState(false);
   const [isLoadingHistory, setIsLoadingHistory] = useState(true);
   const [sitesError, setSitesError] = useState<string | null>(null);
-  const [siteError, setSiteError] = useState<string | null>(null);
   const [unsupportedDestination, setUnsupportedDestination] = useState<
     string | null
   >(null);
   const [historyError, setHistoryError] = useState<string | null>(null);
-  const [query, setQuery] = useState("");
-  const [results, setResults] = useState<Site[]>([]);
-  const [hasSearched, setHasSearched] = useState(false);
-  const [isSearching, setIsSearching] = useState(false);
-  const [searchError, setSearchError] = useState<string | null>(null);
   const iframeRef = useRef<HTMLIFrameElement>(null);
+  const activeSearchRequests = useRef(new Set<string>());
+  const entryId = currentEntry.id;
+  const isPageEntry = currentEntry.kind === "page";
+  const pageAddress = isPageEntry ? currentEntry.address : null;
+  const pageRequestKey = `${entryId}:${reloadKey}`;
+  const pageLoadIsCurrent = pageLoad?.requestKey === pageRequestKey;
+  const currentSite = pageLoadIsCurrent ? pageLoad.site : null;
+  const siteError = pageLoadIsCurrent ? pageLoad.error : null;
+  const isLoadingSite =
+    isPageEntry &&
+    Boolean(pageAddress) &&
+    (!pageLoadIsCurrent || (!currentSite && !siteError));
+  const address =
+    addressDraft.entryId === entryId
+      ? addressDraft.value
+      : pageAddress ?? "";
+  const frameScrollY =
+    currentEntry.kind === "page" ? currentEntry.frameScrollY : 0;
+  const searchEntryId =
+    currentEntry.kind === "search" ? currentEntry.id : null;
+  const searchQuery =
+    currentEntry.kind === "search" ? currentEntry.query : "";
+  const searchStatus =
+    currentEntry.kind === "search" ? currentEntry.searchStatus : null;
+  const selectedPersonId = browserState.selectedPersonId;
   const activePersonId = selectedPersonId || people[0]?._id || "";
+  const view: View = isPublishing
+    ? "publish"
+    : currentEntry.kind === "search"
+      ? "search"
+      : "browse";
+
+  const navigate = useCallback(
+    (targetAddress: string | null, frameScrollY?: number) => {
+      setAddressDraft({ entryId: "", value: "" });
+      setUnsupportedDestination(null);
+      setIsPublishing(false);
+      navigateToPage(targetAddress, frameScrollY);
+    },
+    [navigateToPage],
+  );
 
   const loadSites = useCallback(async () => {
     setIsLoadingSites(true);
@@ -90,9 +173,6 @@ export function SmallWebApp() {
     try {
       const availablePeople = await api.getPeople();
       setPeople(availablePeople);
-      setSelectedPersonId(
-        (current) => current || availablePeople[0]?._id || "",
-      );
     } catch (error) {
       setPeopleError(getErrorMessage(error));
     } finally {
@@ -124,9 +204,6 @@ export function SmallWebApp() {
       .then((availablePeople) => {
         if (!active) return;
         setPeople(availablePeople);
-        setSelectedPersonId(
-          (current) => current || availablePeople[0]?._id || "",
-        );
       })
       .catch((error: unknown) => {
         if (active) setPeopleError(getErrorMessage(error));
@@ -150,6 +227,22 @@ export function SmallWebApp() {
       active = false;
     };
   }, []);
+
+  useEffect(() => {
+    if (
+      isLoadingPeople ||
+      !people.length ||
+      people.some((person) => person._id === selectedPersonId)
+    ) {
+      return;
+    }
+    setSelectedPersonId(people[0]._id);
+  }, [
+    isLoadingPeople,
+    people,
+    setSelectedPersonId,
+    selectedPersonId,
+  ]);
 
   useEffect(() => {
     if (!activePersonId) return;
@@ -177,40 +270,122 @@ export function SmallWebApp() {
     setIsLoadingHistory(true);
   }
 
-  const openSite = useCallback(async (siteOrAddress: Site | string) => {
-    const targetAddress =
-      typeof siteOrAddress === "string" ? siteOrAddress : siteOrAddress.address;
-    setAddress(targetAddress);
-    setIsLoadingSite(true);
-    setSiteError(null);
-    setUnsupportedDestination(null);
-    setView("browse");
+  useEffect(() => {
+    if (!isRestored) return;
+    let active = true;
 
-    try {
-      const site = await api.getSite(targetAddress);
-      setCurrentSite(site);
-      setAddress(site.address);
-    } catch (error) {
-      setCurrentSite(null);
-      setSiteError(
-        error instanceof ApiError && error.status === 404
-          ? `There isn't a stored page at ${targetAddress}.`
-          : getErrorMessage(error),
-      );
-    } finally {
-      setIsLoadingSite(false);
+    if (!isPageEntry || !pageAddress) {
+      void Promise.resolve().then(() => {
+        if (!active) return;
+        setPageLoad({
+          requestKey: pageRequestKey,
+          site: null,
+          error: null,
+        });
+        markPageReady(entryId);
+      });
+      return () => {
+        active = false;
+      };
     }
-  }, []);
+
+    void api
+      .getSite(pageAddress)
+      .then((site) => {
+        if (!active) return;
+        setPageLoad({ requestKey: pageRequestKey, site, error: null });
+      })
+      .catch((error: unknown) => {
+        if (!active) return;
+        setPageLoad({
+          requestKey: pageRequestKey,
+          site: null,
+          error:
+            error instanceof ApiError && error.status === 404
+              ? `There isn't a stored page at ${pageAddress}.`
+              : getErrorMessage(error),
+        });
+      })
+      .finally(() => {
+        if (!active) return;
+        markPageReady(entryId);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [
+    isRestored,
+    markPageReady,
+    entryId,
+    isPageEntry,
+    pageAddress,
+    pageRequestKey,
+  ]);
+
+  useEffect(() => {
+    if (!isRestored || !searchEntryId || !searchStatus) return;
+    if (searchStatus === "idle") {
+      markPageReady(searchEntryId);
+      return;
+    }
+    if (searchStatus !== "pending") {
+      markPageReady(searchEntryId);
+      return;
+    }
+    if (!searchQuery.trim()) {
+      completeSearch(searchEntryId, searchQuery, []);
+      return;
+    }
+
+    const requestKey = `${searchEntryId}:${searchQuery}`;
+    if (activeSearchRequests.current.has(requestKey)) return;
+    activeSearchRequests.current.add(requestKey);
+    let active = true;
+    void api
+      .searchSites(searchQuery.trim())
+      .then((results) => {
+        completeSearch(searchEntryId, searchQuery, results);
+        if (active) {
+          markPageReady(searchEntryId);
+        }
+      })
+      .catch((error: unknown) => {
+        failSearch(searchEntryId, searchQuery, getErrorMessage(error));
+        if (active) {
+          markPageReady(searchEntryId);
+        }
+      })
+      .finally(() => activeSearchRequests.current.delete(requestKey));
+
+    return () => {
+      active = false;
+    };
+  }, [
+    completeSearch,
+    failSearch,
+    isRestored,
+    markPageReady,
+    searchEntryId,
+    searchQuery,
+    searchStatus,
+  ]);
 
   useEffect(() => {
     function handleFrameMessage(event: MessageEvent<unknown>) {
       if (
         event.source !== iframeRef.current?.contentWindow ||
-        !currentSite ||
-        !isIframeLinkMessage(event.data)
+        !currentSite
       ) {
         return;
       }
+
+      if (isIframeScrollMessage(event.data)) {
+        updateCurrentPosition(event.data.y);
+        return;
+      }
+
+      if (!isIframeLinkMessage(event.data)) return;
 
       const resolution = resolveInternalLink(
         event.data.href,
@@ -218,41 +393,33 @@ export function SmallWebApp() {
       );
 
       if (resolution.kind === "internal") {
-        void openSite(resolution.address);
+        navigate(resolution.address, event.data.scrollY);
         return;
       }
 
-      setCurrentSite(null);
-      setSiteError(null);
       setUnsupportedDestination(resolution.destination);
     }
 
     window.addEventListener("message", handleFrameMessage);
     return () => window.removeEventListener("message", handleFrameMessage);
-  }, [currentSite, openSite]);
-
-  async function runSearch() {
-    if (!query.trim()) {
-      setResults([]);
-      setHasSearched(true);
-      return;
-    }
-
-    setIsSearching(true);
-    setSearchError(null);
-    setHasSearched(true);
-    try {
-      setResults(await api.searchSites(query.trim()));
-    } catch (error) {
-      setSearchError(getErrorMessage(error));
-    } finally {
-      setIsSearching(false);
-    }
-  }
+  }, [currentSite, navigate, updateCurrentPosition]);
 
   function handleSearch(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    void runSearch();
+    submitSearch(searchQuery.trim());
+  }
+
+  function selectView(nextView: View) {
+    setAddressDraft({ entryId: "", value: "" });
+    setUnsupportedDestination(null);
+    if (nextView === "publish") {
+      setIsPublishing(true);
+      return;
+    }
+
+    setIsPublishing(false);
+    if (nextView === "search") openSearch();
+    else navigateToPage(null);
   }
 
   async function handlePublish(site: {
@@ -266,16 +433,22 @@ export function SmallWebApp() {
 
   function handlePublished(site: Site) {
     setSites((current) => [site, ...current.filter((item) => item._id !== site._id)]);
-    setCurrentSite(site);
-    setAddress(site.address);
-    setView("browse");
+    navigate(site.address);
   }
 
   function handleHistorySelect(visit: Visit) {
-    void openSite(visit.address);
+    navigate(visit.address);
   }
 
   function renderBrowse() {
+    if (!isRestored) {
+      return (
+        <div className="rounded-2xl border border-stone-200 bg-white">
+          <LoadingState label="Restoring browser session" />
+        </div>
+      );
+    }
+
     if (isLoadingSite) {
       return (
         <div className="rounded-2xl border border-stone-200 bg-white">
@@ -290,7 +463,7 @@ export function SmallWebApp() {
           action={
             <button
               className="inline-flex items-center gap-2 text-sm font-semibold text-emerald-800"
-              onClick={() => void openSite(address)}
+              onClick={retryPage}
               type="button"
             >
               <Icon className="size-4" name="refresh" />
@@ -324,7 +497,13 @@ export function SmallWebApp() {
     }
 
     if (currentSite) {
-      return <PageDisplay iframeRef={iframeRef} site={currentSite} />;
+      return (
+        <PageDisplay
+          frameScrollY={frameScrollY}
+          iframeRef={iframeRef}
+          site={currentSite}
+        />
+      );
     }
 
     if (isLoadingSites) {
@@ -372,7 +551,7 @@ export function SmallWebApp() {
             action={
               <button
                 className="text-sm font-semibold text-emerald-800"
-                onClick={() => setView("publish")}
+                onClick={() => setIsPublishing(true)}
                 type="button"
               >
                 Publish the first page
@@ -388,7 +567,7 @@ export function SmallWebApp() {
               <button
                 className="group min-h-40 rounded-2xl border border-stone-200 bg-white p-5 text-left shadow-sm hover:-translate-y-0.5 hover:border-emerald-200 hover:shadow-md"
                 key={site._id}
-                onClick={() => void openSite(site)}
+                onClick={() => navigate(site.address)}
                 type="button"
               >
                 <span className="flex items-center justify-between">
@@ -426,11 +605,8 @@ export function SmallWebApp() {
       <aside className="hidden w-[228px] shrink-0 flex-col border-r border-stone-200/80 bg-[#fbfbf9] px-4 py-5 lg:flex">
         <button
           className="flex items-center gap-3 px-2 text-left"
-          onClick={() => {
-            setView("browse");
-            setCurrentSite(null);
-            setSiteError(null);
-          }}
+          disabled={!isRestored}
+          onClick={() => selectView("browse")}
           type="button"
         >
           <span className="flex size-9 items-center justify-center rounded-xl bg-emerald-900 text-white">
@@ -455,8 +631,9 @@ export function SmallWebApp() {
                   ? "bg-emerald-50 text-emerald-950"
                   : "text-stone-500 hover:bg-stone-100 hover:text-stone-900"
               }`}
+              disabled={!isRestored}
               key={item.id}
-              onClick={() => setView(item.id)}
+              onClick={() => selectView(item.id)}
               type="button"
             >
               <Icon className="size-[17px]" name={item.icon} />
@@ -488,21 +665,36 @@ export function SmallWebApp() {
               </span>
               <span className="hidden text-sm font-bold sm:block">small web</span>
             </div>
-            <div className="hidden items-center gap-1 sm:flex">
+            <div className="flex shrink-0 items-center gap-1">
               <button
                 aria-label="Go back"
-                className="flex size-9 items-center justify-center rounded-lg text-stone-300"
-                disabled
-                title="Browser navigation will be available soon"
+                className="flex size-9 items-center justify-center rounded-lg text-stone-500 hover:bg-stone-100 hover:text-stone-900 disabled:cursor-not-allowed disabled:text-stone-300 disabled:hover:bg-transparent"
+                disabled={!isRestored || browserState.index === 0}
+                onClick={() => {
+                  setIsPublishing(false);
+                  setUnsupportedDestination(null);
+                  setAddressDraft({ entryId: "", value: "" });
+                  back();
+                }}
+                title="Go back"
                 type="button"
               >
                 <Icon className="size-[18px]" name="arrow-left" />
               </button>
               <button
                 aria-label="Go forward"
-                className="flex size-9 items-center justify-center rounded-lg text-stone-300"
-                disabled
-                title="Browser navigation will be available soon"
+                className="flex size-9 items-center justify-center rounded-lg text-stone-500 hover:bg-stone-100 hover:text-stone-900 disabled:cursor-not-allowed disabled:text-stone-300 disabled:hover:bg-transparent"
+                disabled={
+                  !isRestored ||
+                  browserState.index >= browserState.entries.length - 1
+                }
+                onClick={() => {
+                  setIsPublishing(false);
+                  setUnsupportedDestination(null);
+                  setAddressDraft({ entryId: "", value: "" });
+                  forward();
+                }}
+                title="Go forward"
                 type="button"
               >
                 <Icon className="size-[18px]" name="arrow-right" />
@@ -510,14 +702,18 @@ export function SmallWebApp() {
             </div>
             <AddressBar
               address={address}
-              isLoading={isLoadingSite}
-              onAddressChange={setAddress}
-              onSubmit={(targetAddress) => void openSite(targetAddress)}
+              isLoading={isLoadingSite || !isRestored}
+              onAddressChange={(value) =>
+                setAddressDraft({ entryId, value })
+              }
+              onSubmit={(targetAddress) => {
+                navigate(targetAddress);
+              }}
             />
             <div className="hidden items-center gap-2 xl:flex">
               <span className="text-xs text-stone-400">Browsing as</span>
               <PersonSelect
-                isLoading={isLoadingPeople}
+                isLoading={isLoadingPeople || !isRestored}
                 onChange={handlePersonChange}
                 people={people}
                 selectedId={selectedPersonId}
@@ -536,8 +732,9 @@ export function SmallWebApp() {
                     ? "bg-emerald-50 text-emerald-950"
                     : "text-stone-500"
                 }`}
+                disabled={!isRestored}
                 key={item.id}
-                onClick={() => setView(item.id)}
+                onClick={() => selectView(item.id)}
                 type="button"
               >
                 <Icon className="size-3.5" name={item.icon} />
@@ -546,7 +743,7 @@ export function SmallWebApp() {
             ))}
             <div className="ml-auto xl:hidden">
               <PersonSelect
-                isLoading={isLoadingPeople}
+                isLoading={isLoadingPeople || !isRestored}
                 onChange={handlePersonChange}
                 people={people}
                 selectedId={selectedPersonId}
@@ -561,15 +758,25 @@ export function SmallWebApp() {
               {view === "browse" && renderBrowse()}
               {view === "search" && (
                 <SearchPanel
-                  error={searchError}
-                  hasSearched={hasSearched}
-                  isLoading={isSearching}
-                  onQueryChange={setQuery}
-                  onRetry={() => void runSearch()}
+                  error={
+                    searchStatus === "error" && currentEntry.kind === "search"
+                      ? currentEntry.searchError
+                      : null
+                  }
+                  hasSearched={
+                    searchStatus === "complete" || searchStatus === "error"
+                  }
+                  isLoading={searchStatus === "pending"}
+                  onQueryChange={browser.updateSearchQuery}
+                  onRetry={browser.retrySearch}
                   onSearch={handleSearch}
-                  onSelect={(site) => void openSite(site)}
-                  query={query}
-                  results={results}
+                  onSelect={(site) => {
+                    navigate(site.address);
+                  }}
+                  query={searchQuery}
+                  results={
+                    currentEntry.kind === "search" ? currentEntry.results : []
+                  }
                 />
               )}
               {view === "publish" && (
@@ -613,6 +820,11 @@ export function SmallWebApp() {
                 Retry
               </button>
             </div>
+          )}
+          {sessionError && (
+            <p className="mt-4 text-xs text-rose-700" role="alert">
+              This browser session couldn&apos;t be saved: {sessionError}
+            </p>
           )}
           <footer className="mt-12 flex flex-wrap items-center justify-between gap-2 border-t border-stone-200 pt-4 text-[11px] text-stone-400">
             <span>Small Web · made for wandering</span>

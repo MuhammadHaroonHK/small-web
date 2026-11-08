@@ -45,6 +45,7 @@ export function SearchPanel({
             <span className="sr-only">Search pages</span>
             <input
               className="h-12 min-w-0 flex-1 bg-transparent text-sm text-stone-900 outline-none placeholder:text-stone-400"
+              maxLength={100}
               onChange={(event) => onQueryChange(event.target.value)}
               placeholder="Try “community garden”"
               value={query}

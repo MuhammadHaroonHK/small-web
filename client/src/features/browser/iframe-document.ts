@@ -1,8 +1,8 @@
 const LINK_BRIDGE_SCRIPT =
-  'document.addEventListener("click",function(event){var anchor=event.target instanceof Element?event.target.closest("a"):null;if(!anchor)return;event.preventDefault();event.stopImmediatePropagation();window.parent.postMessage({type:"small-web:link",href:anchor.getAttribute("href")||""},"*")},true);';
+  'function sendScroll(){window.parent.postMessage({type:"small-web:scroll",y:window.scrollY},"*")}window.addEventListener("scroll",sendScroll,{passive:true});window.addEventListener("message",function(event){var data=event.data;if(event.source!==window.parent||!data||typeof data!=="object"||Object.keys(data).length!==2||data.type!=="small-web:restore-scroll"||typeof data.y!=="number"||!Number.isFinite(data.y)||data.y<0||data.y>10000000)return;window.scrollTo(0,data.y)});document.addEventListener("click",function(event){var anchor=event.target instanceof Element?event.target.closest("a"):null;if(!anchor)return;event.preventDefault();event.stopImmediatePropagation();window.parent.postMessage({type:"small-web:link",href:anchor.getAttribute("href")||"",scrollY:window.scrollY},"*")},true);';
 
 const LINK_BRIDGE_HASH =
-  "sha256-i4D8TK5j1nn5WqqeD9NEL4ZfbeWHX7493zkhg8c5o8E=";
+  "sha256-8vX/YKrucOAy57AG2pEcMC9QRDt3cMKSS6eiJpZjbIA=";
 
 export function createSandboxDocument(html: string): string {
   const policy = [

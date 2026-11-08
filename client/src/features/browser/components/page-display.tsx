@@ -6,10 +6,11 @@ import type { Site } from "@/types/api";
 
 type PageDisplayProps = {
   site: Site;
+  frameScrollY: number;
   iframeRef: RefObject<HTMLIFrameElement | null>;
 };
 
-export function PageDisplay({ site, iframeRef }: PageDisplayProps) {
+export function PageDisplay({ site, frameScrollY, iframeRef }: PageDisplayProps) {
   if (!site.html) {
     return (
       <StatusState
@@ -36,6 +37,12 @@ export function PageDisplay({ site, iframeRef }: PageDisplayProps) {
         sandbox="allow-scripts"
         srcDoc={createSandboxDocument(site.html)}
         title={site.title}
+        onLoad={() => {
+          iframeRef.current?.contentWindow?.postMessage(
+            { type: "small-web:restore-scroll", y: frameScrollY },
+            "*",
+          );
+        }}
       />
       <footer className="border-t border-stone-100 px-5 py-3 text-xs text-stone-400 sm:px-8">
         This page is isolated. Publisher scripts, forms, and external requests

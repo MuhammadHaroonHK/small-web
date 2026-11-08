@@ -36,6 +36,7 @@ export function AddressBar({
         autoComplete="url"
         className="min-w-0 flex-1 bg-transparent font-mono text-xs text-stone-700 outline-none placeholder:text-stone-400 sm:text-sm"
         id="address-bar"
+        maxLength={2048}
         onChange={(event) => onAddressChange(event.target.value)}
         placeholder="Enter a smallweb:// address"
         spellCheck={false}
