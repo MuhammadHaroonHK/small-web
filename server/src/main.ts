@@ -10,5 +10,9 @@ async function bootstrap() {
   await app.listen(process.env.PORT ?? 4000);
 }
 
-void bootstrap();
-
+void bootstrap().catch(() => {
+  console.error(
+    'NestJS startup failed. Check MONGODB_URI and verify that MongoDB is reachable.',
+  );
+  process.exitCode = 1;
+});
